@@ -1,0 +1,50 @@
+---
+- name: 设置 SSH 配置及 PAM lastlog
+  become: yes
+  block:
+    - name: 更新 ssh config 参数 UseDNS
+      become: yes
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?UseDNS\\s+yes"
+        replace: "UseDNS no"
+      notify:
+        - restart sshd
+
+    - name: 更新 ssh config 参数 GSSAPIAuthentication
+      become: yes
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?GSSAPIAuthentication\\s+yes"
+        replace: "GSSAPIAuthentication no"
+      notify:
+        - restart sshd
+
+    - name: 启用 SSH 显示登录信息 PrintMotd
+      become: yes
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PrintMotd\\s+no"
+        replace: "PrintMotd yes"
+      notify:
+        - restart sshd
+
+    - name: 启用 SSH 显示登录信息 PrintLastLog
+      become: yes
+      replace:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PrintLastLog\\s+.*"
+        replace: "PrintLastLog yes"
+      notify:
+        - restart sshd
+
+    - name: 启用 pam_lastlog 显示 su 登录信息
+      become: yes
+      lineinfile:
+        path: /etc/pam.d/su
+        regexp: "^session\\s+optional\\s+pam_lastlog\\.so\\s+showfailed"
+        line: "session    optional   pam_lastlog.so showfailed"
+        state: present
+        insertafter: EOF
+      notify:
+        - restart sshd

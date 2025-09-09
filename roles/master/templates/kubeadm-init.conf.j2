@@ -1,0 +1,106 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+bootstrapTokens:
+- groups:
+  - system:bootstrappers:kubeadm:default-node-token
+  token: 35sesk.5tm3tqc66tzlse8c
+  ttl: 24h0m0s
+  usages:
+  - signing
+  - authentication
+localAPIEndpoint:
+  advertiseAddress: 0.0.0.0
+  bindPort: 6443
+nodeRegistration:
+  name: "{{ ansible_hostname }}"  # 动态获取当前主机名
+  criSocket: "{% if k8s_version.replace('v', '').split('-')[0] is version('1.24.0', '>=') %}unix:///run/containerd/containerd.sock{% else %}/var/run/dockershim.sock{% endif %}"
+  imagePullPolicy: IfNotPresent
+  kubeletExtraArgs:
+    cgroup-driver: "systemd"  # 指定 kubelet 使用 systemd 作为 Cgroup 驱动
+  taints:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: "{{ k8s_version }}"
+imageRepository: "{{ k8s_image_url }}"
+{% if api_vip_hosts %}
+controlPlaneEndpoint: "{{ api_vip_hosts }}:{{ lb_port }}"
+{% else %}
+controlPlaneEndpoint: "{{ hostvars[groups['master'][0]]['ansible_host'] }}:6443"
+{% endif %}
+networking:
+  dnsDomain: cluster.local
+  podSubnet: "{{ pod_cidr }}"
+  serviceSubnet: "{{ service_cidr }}"
+apiServer:
+  certSANs:
+  - kubernetes
+  - kubernetes.default
+  - kubernetes.default.svc
+  - kubernetes.default.svc.cluster.local
+  - "*.tianxiang.love"
+{% if api_vip_hosts %}
+  - "{{ api_vip_hosts }}"
+{% endif %}
+{% for host in groups['master'] %}
+  - {{ host }}
+  - {{ hostvars[host].ip }}
+{% endfor %}
+{% if vip %}
+  - "{{ vip }}"
+{% endif %}
+  - 127.0.0.1
+{% if k8s_extra_ips is defined and k8s_extra_ips|length > 0 %}
+{% for ip in k8s_extra_ips %}
+  - {{ ip }}
+{% endfor %}
+{% endif %}
+certificatesDir: /etc/kubernetes/pki
+clusterName: kubernetes
+
+{% if 'etcd' in groups and groups['etcd'] | length > 0 %}
+etcd:
+  external:
+    endpoints:
+{% for host in groups['etcd'] %}
+    - https://{{ host }}:2379
+{% endfor %}
+    caFile: "{{ etcd_ssl }}/etcd-ca.pem"
+    certFile: "{{ etcd_ssl }}/etcd-server.pem"
+    keyFile: "{{ etcd_ssl }}/etcd-server-key.pem"
+{% else %}
+# 使用默认的集群内ETCD
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+{% endif %}
+
+
+# 这种是使用inventory 里已有的 ip 变量
+# ip=192.168.198.62 
+# 如: https://192.168.198.62:2379
+#{% if 'etcd' in groups and groups['etcd'] | length > 0 %}
+#etcd:
+#  external:
+#    endpoints:
+#{% for host in groups['etcd'] %}
+#    - https://{{ hostvars[host].ip if hostvars[host].ip is defined else hostvars[host].ansible_host }}:2379
+#{% endfor %}
+#    caFile: "{{ etcd_ssl }}/etcd-ca.pem"
+#    certFile: "{{ etcd_ssl }}/etcd-server.pem"
+#    keyFile: "{{ etcd_ssl }}/etcd-server-key.pem"
+#{% else %}
+## 使用默认的集群内ETCD
+#etcd:
+#  local:
+#    dataDir: /var/lib/etcd
+#{% endif %}
+scheduler: {}
+controllerManager: {}
+dns: {}
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: ipvs

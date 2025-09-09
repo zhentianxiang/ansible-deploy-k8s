@@ -1,0 +1,36 @@
+- name: 安装软件包
+  become: yes
+  package:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg-agent
+      - software-properties-common
+      - ntp
+      - iftop
+      - ntpdate
+      - rsync
+      - bash-completion
+      - net-tools
+      - wget
+      - gcc
+      - lrzsz
+      - vim
+      - unzip
+      - make
+      - libssl-dev
+      - lvm2
+      - conntrack
+      - ipvsadm
+      - ipset
+      - jq
+      - curl
+      - sysstat
+      - libseccomp2
+      - zip
+    state: latest
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 30

@@ -1,0 +1,110 @@
+---
+- name: K8S < 1.24.0 安装 Docker
+  become: yes
+  block:
+    - name: 设置 Ubuntu 版本代号
+      become: yes
+      set_fact:
+        ubuntu_codename: "{{ ansible_distribution_release }}"
+
+    - name: 创建 keyrings 目录
+      become: yes
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: 下载 Docker GPG 密钥
+      become: yes
+      shell: |
+        wget --tries=3 --waitretry=10 --timeout=60 \
+             -O /tmp/docker.gpg \
+             "{{ docker_gpg_key }}"
+      args:
+        creates: /tmp/docker.gpg
+        warn: false  # 禁用该任务的命令警告
+      register: download_result
+      until: download_result is succeeded
+      retries: 3
+      delay: 10
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: 转换 GPG 密钥格式
+      become: yes
+      shell: |
+        gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: 添加 Docker apt 源
+      become: yes
+      apt_repository:
+        repo: "{{ docker_ce_repo }}"
+        filename: docker
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: 更新 apt 缓存
+      become: yes
+      apt:
+        update_cache: yes
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: 安装 Docker CE
+      become: yes
+      package:
+        name:
+          - "{{ docker_ce }}"
+          - "{{ docker_ce_cli }}"
+        state: present
+      register: install_result
+      until: install_result is succeeded
+      retries: 5
+      delay: 30
+
+    - name: 创建守护进程 docker 目录
+      become: yes
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: 设置 docker 守护进程配置
+      become: yes
+      template:
+        src: "daemon.json.j2"
+        dest: "/etc/docker/daemon.json"
+      notify: 
+        - reload systemd
+        - restart docker
+    
+    - name: 重载 systemd 配置
+      become: yes
+      command: systemctl daemon-reexec
+    
+    - name: 启动 Docker 服务
+      become: yes
+      systemd:
+        name: docker
+        state: restarted
+        enabled: yes
+      register: start_result
+      until: start_result is succeeded
+      retries: 5
+      delay: 30
+
+    - name: 创建 docker 服务目录
+      become: yes
+      raw: mkdir -p /etc/systemd/system/docker.service.d
+
+    - name: 查看 Docker 状态
+      become: yes
+      shell: docker info
+      register: Docker_info
+
+    - name: Docker 状态信息
+      become: yes
+      debug: var=Docker_info.stdout_lines
+  when: k8s_version.replace('v', '').split('-')[0] is version('1.24.0', '<')

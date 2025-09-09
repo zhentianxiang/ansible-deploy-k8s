@@ -1,0 +1,172 @@
+---
+- name: 创建临时目录
+  become: yes
+  file: dest={{ tmp_dir }} state=directory
+
+- name: 创建 GPG 密钥目录
+  become: yes
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: 下载 Kubernetes APT GPG 密钥
+  become: yes
+  get_url:
+    url: "{{ kube_gpg_key }}"
+    dest: /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+    mode: '0644'
+
+- name: 添加 Kubernetes APT 源
+  apt_repository:
+    repo: "{{ kube_repo }}"
+    state: present
+    filename: "kubernetes"
+
+- name: 更新 APT 缓存
+  become: yes
+  apt:
+    update_cache: yes
+
+- name: 安装 kubelet-{{ kube_version }} kubeadm-{{ kube_version }} kubectl-{{ kube_version }}
+  become: yes
+  package:
+    name:
+      - "kubelet={{ kube_version }}"
+      - "kubeadm={{ kube_version }}"
+      - "kubectl={{ kube_version }}"
+    state: present
+
+- name: 删除默认的 kubeadm 二进制文件
+  become: yes
+  file:
+    path: /usr/bin/kubeadm
+    state: absent
+
+- name: 拷贝二次修改的 kubeadm-{{ k8s_version }} 的二进制文件
+  become: yes
+  copy:
+    src: "{{ tmp_dir }}/kubernetes/_output/local/go/bin/kubeadm"
+    dest: /usr/bin/kubeadm
+    mode: '0755'
+
+- name: 设置kubectl自动补全给 ansible_user 和 root
+  become: yes
+  vars:
+    kube_users: "{{ [ansible_user, 'root'] | unique }}"
+    bash_lines:
+      - "source /usr/share/bash-completion/bash_completion"
+      - "source <(kubectl completion bash)"
+  block:
+    - name: 配置每个用户的 kubectl 自动补全
+      lineinfile:
+        path: "{{ '/root/.bashrc' if user == 'root' else '/home/' + user + '/.bashrc' }}"
+        line: "{{ line }}"
+        create: yes
+        insertafter: EOF
+        state: present
+      loop: "{{ kube_users | product(bash_lines) | list }}"
+      loop_control:
+        label: "{{ item[0] }} -> {{ item[1] }}"
+      vars:
+        user: "{{ item[0] }}"
+        line: "{{ item[1] }}"
+
+- name: 分发join脚本
+  become: yes
+  copy:
+    src: "{{ tmp_dir }}/master-join.sh"
+    dest: "{{ tmp_dir }}/master-join.sh"
+    mode: '0755'
+
+- name: 修改 kubelet 存储目录
+  become: yes
+  template: src=kubelet.j2 dest=/etc/sysconfig/kubelet
+  notify:
+    - reload systemd
+    - restart kubelet
+
+- name: 修改 cgroup 为 systemd
+  become: yes
+  template: src=10-kubeadm.conf.j2 dest=/etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+  notify:
+    - reload systemd
+    - restart kubelet
+
+- name: 重载 systemd 配置
+  become: yes
+  command: systemctl daemon-reexec
+
+- name: 检查 admin.conf 是否存在
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: admin_conf_file
+
+- name: 检查集群是否已初始化
+  become: yes
+  command: kubectl get nodes --kubeconfig=/etc/kubernetes/admin.conf
+  register: kubectl_check
+  when: admin_conf_file.stat.exists
+  failed_when: false   # 避免报错，rc != 0 不算失败
+  changed_when: false  # 纯检查，不算改变
+
+- name: 设置集群初始化状态
+  set_fact:
+    cluster_initialized: "{{ admin_conf_file.stat.exists and kubectl_check.rc == 0 }}"
+
+- name: 显示集群初始化状态
+  debug:
+    msg: "集群已初始化，跳过初始化步骤"
+  when: cluster_initialized
+
+- name: 其余 master 加入集群
+  become: yes
+  shell: "/bin/bash {{ tmp_dir }}/master-join.sh >/dev/null 2>&1"
+  args:
+    warn: false
+  when: not cluster_initialized
+
+- name: 设置 kubeconfig 给 ansible_user 和 root
+  become: yes
+  vars:
+    kube_users: "{{ [ansible_user, 'root'] | unique }}"
+  block:
+    - name: 创建 kube config 目录
+      become: yes
+      file:
+        path: "{{ (item == 'root') | ternary('/root/.kube', '/home/' + item + '/.kube') }}"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: '0700'
+      loop: "{{ kube_users }}"
+      when:
+        - not cluster_initialized
+
+    - name: 复制 kubeconfig 文件
+      become: yes
+      copy:
+        src: "/etc/kubernetes/admin.conf"
+        dest: "{{ (item == 'root') | ternary('/root/.kube/config', '/home/' + item + '/.kube/config') }}"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: '0600'
+        remote_src: yes
+      loop: "{{ kube_users }}"
+      when:
+        - not cluster_initialized
+
+- name: 等待 Kubernetes API 服务器准备好
+  become: yes
+  wait_for:
+    host: "{{ ansible_host | default(inventory_hostname) }}"
+    port: 6443
+    state: started
+    timeout: 300
+  delegate_to: localhost
+  register: kube_api_ready
+  retries: 30
+  delay: 5
+  until: kube_api_ready is succeeded
+  when:
+    - not cluster_initialized

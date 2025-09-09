@@ -1,0 +1,26 @@
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+# k8s 高可用 VIP
+{% if vip is defined and vip and api_vip_hosts is defined and api_vip_hosts %}
+{{ vip }} {{ api_vip_hosts }}
+{% endif %}
+
+# 配置 k8s 组主机
+{% for host in groups['k8s'] %}
+{{ hostvars[host].ip }} {{ hostvars[host].inventory_hostname }}
+{% endfor %}
+
+# 配置 etcd 组主机
+{% if 'etcd' in groups and groups['etcd'] | length > 0 %}
+{% for etcd in groups['etcd'] %}
+{{ hostvars[etcd].ip }} {{ hostvars[etcd].inventory_hostname }}
+{% endfor %}
+{% endif %}
+
+# 配置自定义的 hosts 解析
+{% if custom_hosts is defined and custom_hosts %}
+{% for hostname, ip in custom_hosts.items() %}
+{{ ip }}   {{ hostname }}
+{% endfor %}
+{% endif %}

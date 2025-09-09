@@ -1,0 +1,96 @@
+---
+- name: 1.系统初始化
+  become: yes
+  gather_facts: true
+  hosts: all
+  roles:
+    - init
+  tags: init 
+
+- name: 2.K8S 主机名
+  become: yes
+  gather_facts: true
+  hosts: k8s
+  roles:
+    - hostname
+  tags: hostname
+
+- name: 3.部署Docker
+  become: yes
+  gather_facts: true
+  hosts: k8s 
+  roles:
+    - docker 
+  tags: docker
+
+- name: 4.部署Containerd
+  become: yes
+  gather_facts: true
+  hosts: k8s 
+  roles:
+    - containerd 
+  tags: containerd
+
+- name: 5.部署Keepalived高可用
+  become: yes
+  gather_facts: true
+  hosts: ha
+  roles:
+    - ha
+  tags: ha
+
+- name: 6.部署Nginx负载均衡
+  become: yes
+  gather_facts: true
+  hosts: ha
+  roles:
+    - lb
+  tags: lb
+
+#- name: 7.部署ETCD
+#  become: yes
+#  gather_facts: true
+#  hosts: "{{ groups['etcd'] | union(groups['master']) }}"
+#  roles:
+#    - etcd
+#  tags: etcd
+
+- name: 7.部署ETCD
+  become: yes
+  gather_facts: true
+  hosts: "{{ groups['etcd'] if (groups['etcd'] | length > 0) else [] }}"
+  roles:
+    - etcd
+  tags: etcd
+
+- name: 8.部署K8S Master01
+  become: yes
+  gather_facts: true
+  hosts: master[0]
+  roles:
+    - master
+  tags: master
+
+- name: 9.部署额外K8S Master
+  become: yes
+  gather_facts: true
+  hosts: master[1:]
+  roles:
+    - joinmaster
+  tags: joinmaster
+
+- name: 10.部署K8S Node
+  become: yes
+  gather_facts: true
+  hosts: node
+  roles:
+    - node
+  tags: node
+
+- name: 11.部署插件
+  become: yes
+  gather_facts: true
+  hosts: master[0]
+  roles:
+    - plugin
+  tags: plugin

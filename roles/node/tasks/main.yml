@@ -1,0 +1,136 @@
+---
+- name: 创建临时目录
+  become: yes
+  file: dest={{ tmp_dir }} state=directory
+
+- name: 创建 GPG 密钥目录
+  become: yes
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: 下载 Kubernetes APT GPG 密钥
+  become: yes
+  apt_key:
+    url: "{{ kube_gpg_key }}"
+
+- name: 添加 Kubernetes APT 源
+  apt_repository:
+    repo: "{{ kube_repo }}"
+    state: present
+    filename: "kubernetes"
+
+- name: 更新 APT 缓存
+  become: yes
+  apt:
+    update_cache: yes
+
+- name: 安装 kubelet-{{ kube_version }} kubeadm-{{ kube_version }} kubectl-{{ kube_version }}
+  become: yes
+  package:
+    name:
+      - "kubelet={{ kube_version }}"
+      - "kubeadm={{ kube_version }}"
+      - "kubectl={{ kube_version }}"
+    state: present
+
+- name: 删除默认的 kubeadm 二进制文件
+  become: yes
+  file:
+    path: /usr/bin/kubeadm
+    state: absent
+
+- name: 拷贝二次修改的 kubeadm-{{ k8s_version }} 的二进制文件
+  become: yes
+  copy:
+    src: "{{ tmp_dir }}/kubernetes/_output/local/go/bin/kubeadm"
+    dest: /usr/bin/kubeadm
+    mode: '0755'
+
+- name: 分发join脚本
+  become: yes
+  copy:
+    src: "{{ tmp_dir }}/node-join.sh"
+    dest: "{{ tmp_dir }}/node-join.sh"
+    mode: '0755'
+
+- name: 修改 kubelet 存储目录
+  become: yes
+  template:
+    src: "kubelet.j2"
+    dest: "/etc/sysconfig/kubelet"
+  notify:
+    - reload systemd
+    - restart kubelet
+
+- name: 创建 kubelet.service.d 目录
+  become: yes
+  file: 
+    dest: /etc/systemd/system/kubelet.service.d
+    state: directory
+
+- name: 修改 cgroup 为 systemd
+  become: yes
+  template:
+    src: "10-kubeadm.conf.j2"
+    dest: "/etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
+  notify:
+    - reload systemd
+    - restart kubelet
+
+- name: 创建 manifests 目录
+  become: yes
+  file: 
+    dest: "/etc/kubernetes/manifests"
+    state: directory
+
+- name: 检查 kubelet 服务状态
+  become: yes
+  systemd:
+    name: kubelet
+  register: kubelet_service
+
+- name: 检查 kubelet 服务状态
+  systemd:
+    name: kubelet
+  register: kubelet_service
+  ignore_errors: yes
+
+- name: 设置节点加入状态
+  set_fact:
+    node_joined: "{{ 
+      kubelet_service is succeeded and 
+      kubelet_service.status.ActiveState == 'active' and 
+      kubelet_service.status.SubState == 'running' 
+    }}"
+
+- name: 显示已加入节点状态
+  become: yes
+  debug:
+    msg: "节点 {{ inventory_hostname }} 已加入集群 (kubelet 正在运行)"
+  when: node_joined
+
+- name: 加入集群（仅当 kubelet 未运行时）
+  become: yes
+  shell: "/bin/bash {{ tmp_dir }}/node-join.sh >/dev/null 2>&1"
+  args:
+    warn: false
+  when: not node_joined
+  register: join_result
+
+- name: 重启 containerd 服务
+  become: yes
+  systemd:
+    name: containerd
+    state: restarted
+  when: join_result is succeeded
+
+- name: 重启kubelet
+  become: yes
+  systemd:
+    name: kubelet
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  when: join_result is succeeded

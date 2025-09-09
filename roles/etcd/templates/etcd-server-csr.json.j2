@@ -1,0 +1,47 @@
+{
+  "CN": "etcd",
+  "hosts": [
+    "127.0.0.1",
+    "localhost",
+    "dns.tianxiang.love",
+    "*.tianxiang.love",
+    "kubernetes",
+    "kubernetes.default",
+    "kubernetes.default.svc",
+    "kubernetes.default.svc.cluster",
+    "kubernetes.default.svc.cluste.local",
+    "{{ api_vip_hosts }}",
+    {% for host in groups['etcd'] %}
+      "{{ hostvars[host].ip if hostvars[host].ip is defined else hostvars[host].ansible_host }}",
+      "{{ host }}"
+      {% if not loop.last %},{% endif %}
+    {% endfor %}
+
+    {% for host in groups['master'] %}
+      ,"{{ hostvars[host].ip if hostvars[host].ip is defined else hostvars[host].ansible_host }}"
+      ,"{{ host }}"
+    {% endfor %}
+    {% if vip is defined %}
+      ,"{{ vip }}"
+    {% endif %}
+
+    {% if extra_ips is defined and extra_ips|length > 0 %}
+      {% for ip in extra_ips %}
+        ,"{{ ip }}"
+      {% endfor %}
+    {% endif %}
+  ],
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "L": "BeiJing",
+      "ST": "BeiJing",
+      "O": "etcd",
+      "OU": "Etcd Security"
+    }
+  ]
+}

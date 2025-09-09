@@ -1,0 +1,466 @@
+---
+- hosts: k8s
+  gather_facts: False
+  tasks:
+    - name: 移除k8s集群配置
+      become: yes
+      block:
+        - name: 检查kubeadm是否存在
+          stat:
+            path: /usr/bin/kubeadm
+          register: kubeadm_exists
+
+        - name: 执行kubeadm reset
+          shell: "kubeadm reset -f  >/dev/null 2>&1"
+          when: kubeadm_exists.stat.exists
+          ignore_errors: yes
+          failed_when: false
+          register: kubeadm_reset_result
+
+    - name: 停止所有相关服务
+      become: yes
+      block:
+        - name: 检查服务是否存在并停止
+          systemd:
+            name: "{{ item }}"
+            state: stopped
+            enabled: no
+          loop:
+            - kubelet
+            - docker
+            - containerd
+            - keepalived
+          ignore_errors: yes
+          register: service_stop_result
+          failed_when: false
+
+    - name: 卸载Kubernetes相关软件包
+      become: yes
+      block:
+        - name: 卸载 Kubernetes 核心组件（使用 apt purge）
+          shell: "apt-get purge -y {{ item }}"
+          loop:
+            - kubelet
+            - kubeadm
+            - kubectl
+          args:
+            warn: false  # 禁用该任务的命令警告
+          ignore_errors: yes
+          register: k8s_package_remove_result
+          failed_when: false
+        
+    - name: 卸载容器运行时软件包
+      become: yes
+      block:
+        - name: 卸载容器运行时组件
+          package:
+            name: "{{ item }}"
+            state: absent
+          loop:
+            - docker-ce
+            - docker-ce-cli
+            - containerd.io
+          ignore_errors: yes
+          register: container_package_remove_result
+          failed_when: false
+
+    - name: 关闭相关进程 PID
+      become: yes
+      block:
+        - name: 安全关闭 kube 进程端口占用
+          shell: |
+            # 检查并终止占用指定端口的 kube 进程
+            pids=$(netstat -lntp 2>/dev/null | grep -E ":10257|:10256|:10249|:6443" | grep -E "(kube|k8s)" | awk '{print $7}' | cut -d'/' -f1 | sort -u)
+            if [ -n "$pids" ]; then
+              echo "发现占用端口的进程: $pids"
+              kill -9 $pids 2>/dev/null || true
+              echo "已终止进程"
+            else
+              echo "未发现占用端口的 kube 进程"
+            fi
+          args:
+            warn: false
+          register: kill_result
+          changed_when: kill_result.stdout != ""
+          failed_when: false
+
+    - name: 卸载其他软件包
+      become: yes
+      block:
+        - name: 卸载其他组件
+          package:
+            name: "{{ item }}"
+            state: absent
+          loop:
+            - keepalived
+            - nginx
+          ignore_errors: yes
+          register: other_package_remove_result
+          failed_when: false
+
+    - name: 清理Docker GPG密钥和软件源
+      become: yes
+      block:
+        - name: 检查Docker GPG密钥文件
+          stat:
+            path: "{{ item }}"
+          register: docker_gpg_check
+          loop:
+            - /etc/apt/trusted.gpg.d/docker.gpg
+            - /etc/apt/keyrings/docker.gpg
+            - /tmp/docker.gpg
+
+        - name: 删除存在的Docker GPG密钥文件
+          file:
+            path: "{{ item.item }}"
+            state: absent
+          loop: "{{ docker_gpg_check.results }}"
+          when: item.stat.exists
+          ignore_errors: yes
+
+        - name: 检查Docker软件源文件
+          stat:
+            path: /etc/apt/sources.list.d/docker.list
+          register: docker_repo_check
+
+        - name: 删除Docker软件源文件
+          file:
+            path: /etc/apt/sources.list.d/docker.list
+            state: absent
+          when: docker_repo_check.stat.exists
+          ignore_errors: yes
+
+    - name: 清理Kubernetes GPG密钥和软件源
+      become: yes
+      block:
+        - name: 检查Kubernetes GPG密钥文件
+          stat:
+            path: "{{ item }}"
+          register: kube_gpg_check
+          loop:
+            - /etc/apt/trusted.gpg.d/kubernetes-archive-keyring.gpg
+            - /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+
+        - name: 删除存在的Kubernetes GPG密钥文件
+          file:
+            path: "{{ item.item }}"
+            state: absent
+          loop: "{{ kube_gpg_check.results }}"
+          when: item.stat.exists
+          ignore_errors: yes
+
+        - name: 检查Kubernetes软件源文件
+          stat:
+            path: /etc/apt/sources.list.d/kubernetes.list
+          register: kube_repo_check
+
+        - name: 删除Kubernetes软件源文件
+          file:
+            path: /etc/apt/sources.list.d/kubernetes.list
+            state: absent
+          when: kube_repo_check.stat.exists
+          ignore_errors: yes
+
+    - name: 恢复原始sources.list
+      become: yes
+      block:
+        - name: 检查是否存在sources.list.bak备份
+          stat:
+            path: /etc/apt/sources.list.bak
+          register: sources_backup
+
+        - name: 恢复原始sources.list
+          copy:
+            src: /etc/apt/sources.list.bak
+            dest: /etc/apt/sources.list
+            remote_src: yes
+          when: sources_backup.stat.exists
+          ignore_errors: yes
+          register: sources_restore_result
+
+        - name: 删除备份文件
+          file:
+            path: /etc/apt/sources.list.bak
+            state: absent
+          when: sources_backup.stat.exists
+          ignore_errors: yes
+
+    - name: 恢复原始hosts文件
+      become: yes
+      block:
+        - name: 检查是否存在hosts.bak备份
+          stat:
+            path: /etc/hosts.bak
+          register: hosts_backup
+
+        - name: 恢复原始hosts文件
+          copy:
+            src: /etc/hosts.bak
+            dest: /etc/hosts
+            remote_src: yes
+          when: hosts_backup.stat.exists
+          ignore_errors: yes
+          register: hosts_restore_result
+
+        - name: 删除hosts备份文件
+          file:
+            path: /etc/hosts.bak
+            state: absent
+          when: hosts_backup.stat.exists
+          ignore_errors: yes
+
+    - name: 清理Docker挂载点
+      become: yes
+      block:
+        - name: 检查并清理Docker挂载点
+          shell: |
+            # 清理Docker相关的挂载点
+            for mount_point in $(mount | grep -E "(docker|containerd)" | awk '{print $3}' | sort -r); do
+              umount "$mount_point" 2>/dev/null || true
+            done
+            # 清理overlay挂载点
+            for mount_point in $(mount | grep overlay | awk '{print $3}' | sort -r); do
+              umount "$mount_point" 2>/dev/null || true
+            done
+          ignore_errors: yes
+          failed_when: false
+          register: umount_result
+          changed_when: true
+
+    - name: 删除数据目录
+      become: yes
+      block:
+        - name: 检查并删除Docker数据目录
+          stat:
+            path: "{{ docker_data_dir }}"
+          register: docker_data_exists
+
+        - name: 删除Docker数据目录
+          file:
+            path: "{{ docker_data_dir }}"
+            state: absent
+          when: docker_data_exists.stat.exists
+          ignore_errors: yes
+
+        - name: 检查并删除containerd数据目录
+          stat:
+            path: "{{ containerd_data }}"
+          register: containerd_data_exists
+
+        - name: 删除containerd数据目录
+          file:
+            path: "{{ containerd_data }}"
+            state: absent
+          when: containerd_data_exists.stat.exists
+          ignore_errors: yes
+
+        - name: 检查并删除kubelet数据目录
+          stat:
+            path: "{{ kubelet_data_dir }}"
+          register: kubelet_data_exists
+
+        - name: 删除kubelet数据目录
+          file:
+            path: "{{ kubelet_data_dir }}"
+            state: absent
+          when: kubelet_data_exists.stat.exists
+          ignore_errors: yes
+
+    - name: 删除相关配置和数据目录
+      become: yes
+      block:
+        - name: 检查并删除配置目录
+          stat:
+            path: "{{ item }}"
+          register: config_dirs_check
+          loop:
+            - /etc/kubernetes/
+            - /root/.kube/
+            - "{{ etcd_data }}"
+            - "{{ etcd_ssl }}"
+            - /var/lib/kubelet
+            - /var/lib/dockershim
+            - /var/run/kubernetes
+            - /var/run/containerd
+            - /var/lib/cni
+            - /etc/cni/net.d
+            - "{{ tmp_dir }}"
+            - /etc/docker/
+            - /etc/systemd/system/docker.service.d/
+            - /etc/sysconfig/kubelet
+            - /etc/systemd/system/kubelet.service.d/
+            - /etc/systemd/system/containerd.service
+            - /lib/systemd/system/containerd.service
+            - /usr/lib/systemd/system/containerd.service
+            - /etc/systemd/system/docker.service
+            - /lib/systemd/system/docker.service
+            - /usr/lib/systemd/system/docker.service
+            - /etc/systemd/system/nginx.service
+            - /lib/systemd/system/nginx.service
+            - /usr/lib/systemd/system/nginx.service
+            - /etc/systemd/system/keepalived.service
+            - /lib/systemd/system/keepalived.service
+            - /usr/lib/systemd/system/keepalived.service
+            - /etc/systemd/system/kubelet.service
+            - /lib/systemd/system/kubelet.service
+            - /usr/lib/systemd/system/kubelet.service
+
+        - name: 删除存在的配置目录
+          file:
+            path: "{{ item.item }}"
+            state: absent
+          loop: "{{ config_dirs_check.results }}"
+          when: item.stat.exists
+          ignore_errors: yes
+
+        - name: 清理用户kube配置目录
+          shell: |
+            for user_home in /home/*; do
+              if [ -d "$user_home/.kube" ]; then
+                rm -rf "$user_home/.kube"
+              fi
+            done
+          ignore_errors: yes
+          changed_when: true
+
+    - name: 清理网络配置
+      become: yes
+      block:
+        - name: 清理iptables规则
+          shell: |
+            iptables -F 2>/dev/null || true
+            iptables -t nat -F 2>/dev/null || true
+            iptables -t mangle -F 2>/dev/null || true
+            iptables -X 2>/dev/null || true
+            iptables -t nat -X 2>/dev/null || true
+            iptables -t mangle -X 2>/dev/null || true
+          ignore_errors: yes
+          changed_when: true
+
+        - name: 清理ipvs规则
+          shell: |
+            ipvsadm -C 2>/dev/null || true
+          ignore_errors: yes
+          changed_when: true
+
+        - name: 清理网络接口
+          shell: |
+            # 删除Docker和Kubernetes相关的网络接口
+            for iface in $(ip link show | grep -E "(docker|br-|veth|flannel|cni)" | cut -d: -f2 | tr -d ' '); do
+              ip link delete "$iface" 2>/dev/null || true
+            done
+          ignore_errors: yes
+          changed_when: true
+
+    - name: 恢复swap配置
+      become: yes
+      block:
+        - name: 检查并恢复swap配置
+          replace:
+            path: /etc/fstab
+            regexp: '^#(/swap.img.*) swap (.*)'
+            replace: '/\1 swap \2'
+          ignore_errors: yes
+          register: swap_restore_result
+
+    - name: 清理用户环境配置
+      become: yes
+      block:
+        - name: 清理root用户的kubectl自动补全配置
+          lineinfile:
+            path: /root/.bashrc
+            regexp: 'source <\(kubectl completion bash\)'
+            state: absent
+          ignore_errors: yes
+          register: root_bashrc_cleanup
+
+        - name: 清理其他用户的kubectl配置
+          shell: |
+            for user_home in /home/*; do
+              if [ -d "$user_home" ]; then
+                user=$(basename "$user_home")
+                if [ -f "$user_home/.bashrc" ]; then
+                  sed -i '/source <(kubectl completion bash)/d' "$user_home/.bashrc"
+                fi
+              fi
+            done
+          ignore_errors: yes
+          changed_when: true
+
+    - name: 更新和清理apt缓存
+      become: yes
+      block:
+        - name: 更新apt缓存
+          apt:
+            update_cache: yes
+            cache_valid_time: 0
+          ignore_errors: yes
+          register: apt_update_result
+
+        - name: 清理apt缓存
+          shell: |
+            apt-get clean
+            apt-get autoclean
+          ignore_errors: yes
+          changed_when: true
+          args:
+            warn: false  # 禁用该任务的命令警告
+
+    - name: 重启系统服务
+      become: yes
+      block:
+        - name: 重启关键系统服务
+          systemd:
+            name: "{{ item }}"
+            state: restarted
+          loop:
+            - systemd-resolved
+          ignore_errors: yes
+          register: service_restart_result
+
+- hosts: ha
+  gather_facts: false
+  tasks: 
+    - name: 停止高可用服务
+      become: yes
+      block:
+        - name: 检查并停止keepalived服务
+          systemd:
+            name: keepalived
+            state: stopped
+            enabled: no
+          ignore_errors: yes
+          register: keepalived_stop_result
+
+        - name: 检查并停止nginx服务
+          systemd:
+            name: nginx
+            state: stopped
+            enabled: no
+          ignore_errors: yes
+          register: nginx_stop_result
+
+    - name: 卸载高可用负载均衡服务
+      become: yes
+      block:
+        - name: 检查并卸载nginx
+          package:
+            name: nginx
+            state: absent
+          ignore_errors: yes
+          register: nginx_remove_result
+
+        - name: 检查并卸载keepalived
+          package:
+            name: keepalived
+            state: absent
+          ignore_errors: yes
+          register: keepalived_remove_result
+
+#- hosts: k8s
+#  become: yes
+#  gather_facts: false
+#  tasks:
+#    - name: 1分钟后重启k8s服务器
+#      shell: "shutdown -r 1"
+

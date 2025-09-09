@@ -1,0 +1,267 @@
+---
+- name: K8S >= 1.24.0 安装 Containerd
+  become: yes
+  block:
+    - name: 检查 containerd 发行包是否存在
+      become: yes
+      stat:
+        path: "/usr/local/src/cri-containerd-cni-{{containerd_version}}-linux-amd64.tar.gz"
+      register: containerd_binary
+
+    - name: 下载 containerd 发行包
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "{{ ghproxy }}/https://github.com/containerd/containerd/releases/download/v{{containerd_version}}/cri-containerd-cni-{{containerd_version}}-linux-amd64.tar.gz"
+        -O "/usr/local/src/cri-containerd-cni-{{containerd_version}}-linux-amd64.tar.gz"
+      args:
+        creates: "/usr/local/src/cri-containerd-cni-{{containerd_version}}-linux-amd64.tar.gz"
+        warn: false
+      when: not containerd_binary.stat.exists
+
+    - name: 创建 containerd 安装目录
+      become: yes
+      file:
+        path: "/usr/local/cri-containerd-cni"
+        state: directory
+
+    - name: 解压 containerd 压缩包
+      become: yes
+      unarchive:
+        src: "/usr/local/src/cri-containerd-cni-{{containerd_version}}-linux-amd64.tar.gz"
+        dest: "/usr/local/cri-containerd-cni"
+        remote_src: yes  # 直接在目标机器上解压
+
+    - name: 复制 containerd 二进制文件到 /usr/local/bin
+      become: yes
+      copy:
+        remote_src: yes
+        src: "/usr/local/cri-containerd-cni/usr/local/bin/"
+        dest: "/usr/local/bin/"
+        mode: '0755'  # 赋予执行权限
+
+    - name: 确保文件具有执行权限
+      become: yes
+      file:
+        path: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+      loop:
+        - containerd
+        - containerd-shim
+        - containerd-shim-runc-v1
+        - containerd-shim-runc-v2
+        - containerd-stress
+        - crictl
+        - critest
+        - ctd-decoder
+        - ctr
+
+    - name: 确保 /etc/containerd 目录存在
+      become: yes
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'  # 设置目录权限（可选）
+
+    - name: 生成 containerd 默认配置文件
+      become: yes
+      command: containerd config default
+      register: containerd_config  # 保存输出内容
+      changed_when: false  # 不标记为更改
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 将 containerd 配置写入 /etc/containerd/config.toml
+      become: yes
+      copy:
+        content: "{{ containerd_config.stdout }}"
+        dest: "/etc/containerd/config.toml"
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 修改 containerd 配置
+      become: yes
+      lineinfile:
+        path: "/etc/containerd/config.toml"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: 'sandbox_image = "registry.k8s.io/pause:[0-9]+\.[0-9]+"', line: '    sandbox_image = "{{ pause_image }}"' }
+        - { regexp: 'SystemdCgroup = false', line: '            SystemdCgroup = true' }
+        - { regexp: '      config_path = ""', line: '      config_path = "/etc/containerd/certs.d"' }
+        - { regexp: 'root = "/var/lib/containerd"', line: 'root = "{{ containerd_data }}"' }
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 创建证书加速目录 (docker.io)
+      become: yes
+      file:
+        path: /etc/containerd/certs.d/docker.io
+        state: directory
+        mode: '0755'
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 创建证书加速目录（registry.k8s.io）
+      become: yes
+      file:
+        path: /etc/containerd/certs.d/registry.k8s.io
+        state: directory
+        mode: '0755'
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 创建证书加速文件 (docker.io)
+      become: yes
+      copy:
+        dest: /etc/containerd/certs.d/docker.io/hosts.toml
+        content: |
+          server = "https://docker.io"
+    
+          [host."https://dockerproxy.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.m.daocloud.io"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://reg-mirror.qiniu.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://registry.docker-cn.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."http://hub-mirror.c.163.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.1panel.live"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://mirror.ccs.tencentyun.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.mirrors.ustc.edu.cn"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.nju.edu.cn"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://mirror.baidubce.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.mirrors.sjtug.sjtu.edu.cn"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://mirror.iscas.ac.cn"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+          [host."https://docker.rainbond.cc"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 创建证书加速文件 (registry.k8s.io)
+      become: yes
+      copy:
+        dest: /etc/containerd/certs.d/registry.k8s.io/hosts.toml
+        content: |
+          server = "https://registry.k8s.io"
+
+          [host."https://k8s.m.daocloud.io"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 配置 crictl 使其通过 Unix 套接字与 containerd 通信
+      become: yes
+      command: "{{ item }}"
+      with_items:
+        - "crictl config runtime-endpoint unix:///run/containerd/containerd.sock"
+        - "crictl config image-endpoint unix:///run/containerd/containerd.sock"
+
+    - name: 检查 runc 二进制文件是否存在
+      become: yes
+      stat:
+        path: "/usr/local/bin/runc"
+      register: runc_binary
+
+    - name: 下载 runc 二进制文件
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "{{ ghproxy }}/https://github.com/opencontainers/runc/releases/download/{{ runc_version }}/runc.amd64"
+        -O /usr/local/bin/runc
+      args:
+        creates: /usr/local/bin/runc
+        warn: false
+      when: not runc_binary.stat.exists
+
+    - name: 确保 runc 有执行权限
+      become: yes
+      file:
+        path: "/usr/local/bin/runc"
+        mode: '0755'
+
+    - name: 解除服务屏蔽（如果被屏蔽）
+      become: yes
+      command: systemctl unmask containerd
+      args:
+        warn: false
+
+    - name: 复制 containerd.service 到 systemd 目录
+      become: yes
+      copy:
+        dest: "/etc/systemd/system/containerd.service"
+        mode: '0644'  # 赋予合适的权限
+        content: |
+          [Unit]
+          Description=containerd container runtime
+          Documentation=https://containerd.io
+          After=network.target local-fs.target
+
+          [Service]
+          #uncomment to enable the experimental sbservice (sandboxed) version of containerd/cri integration
+          #Environment="ENABLE_CRI_SANDBOXES=sandboxed"
+          ExecStartPre=-/sbin/modprobe overlay
+          ExecStart=/usr/local/bin/containerd
+
+          Type=notify
+          Delegate=yes
+          KillMode=process
+          Restart=always
+          RestartSec=5
+          # Having non-zero Limit*s causes performance problems due to accounting overhead
+          # in the kernel. We recommend using cgroups to do container-local accounting.
+          LimitNPROC=infinity
+          LimitCORE=infinity
+          LimitNOFILE=infinity
+          # Comment TasksMax if your systemd version does not supports it.
+          # Only systemd 226 and above support this version.
+          TasksMax=infinity
+          OOMScoreAdjust=-999
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - reload systemd
+        - restart containerd
+
+    - name: 重新加载 systemd 守护进程
+      become: yes
+      command: systemctl daemon-reexec
+
+    - name: 启动并设置 containerd 开机自启
+      become: yes
+      systemd:
+        name: containerd
+        enabled: yes
+        state: started
+  when: k8s_version.replace('v', '').split('-')[0] is version('1.24.0', '>=')

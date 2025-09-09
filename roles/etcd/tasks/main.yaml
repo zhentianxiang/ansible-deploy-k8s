@@ -1,0 +1,521 @@
+---
+- name: "安装 ETCD 自签证书工具"
+  block:
+    - name: Gather facts for master and etcd nodes
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['master'] + groups['etcd'] }}"
+      run_once: true
+
+    - name: DEBUG etcd 分组信息
+      become: yes
+      debug:
+        msg: "inventory_hostname={{ inventory_hostname }}, etcd_group={{ groups['etcd'] }}"
+      when: "'etcd' in group_names"
+
+    - name: "在主ETCD节点上安装OpenSSL"
+      become: yes
+      ansible.builtin.package:
+        name: openssl
+        state: present
+      when: "'etcd' in group_names"
+    
+    - name: "在etcd和master节点上创建etcd用户和组"
+      become: yes
+      user:
+        name: etcd
+        comment: "ETCD User"
+        shell: /sbin/nologin
+        system: yes
+      when: "'etcd' in group_names or 'master' in group_names"
+    
+    - name: "在etcd和master节点上为etcd证书创建目录"
+      become: yes
+      ansible.builtin.file:
+        path: "{{ etcd_ssl }}"
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: '0700'
+      when: "'etcd' in group_names or 'master' in group_names"
+    
+    - name: "检查当前节点是否为主ETCD节点"
+      become: yes
+      ansible.builtin.set_fact:
+        is_primary_etcd_node: "{{ inventory_hostname == groups['etcd'][0] }}"
+    
+    - name: 检查 cfssl 是否已存在
+      become: yes
+      stat:
+        path: "/usr/local/bin/cfssl"
+      register: cfssl_file
+      when: "'etcd' in group_names and is_primary_etcd_node"
+    
+    - name: 下载 cfssl
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "https://pkg.cfssl.org/R1.2/cfssl_linux-amd64"
+        -O /usr/local/bin/cfssl
+      args:
+        creates: /usr/local/bin/cfssl
+        warn: false  # 禁用该任务的命令警告
+      register: download_result
+      retries: 10
+      delay: 5
+      until: download_result is succeeded
+      when: "'etcd' in group_names and is_primary_etcd_node and not cfssl_file.stat.exists"
+    
+    - name: 检查 cfssljson 是否已存在
+      become: yes
+      stat:
+        path: "/usr/local/bin/cfssljson"
+      register: cfssl_json_file
+      when: "'etcd' in group_names and is_primary_etcd_node"
+    
+    - name: 下载 cfssljson
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64"
+        -O /usr/local/bin/cfssljson
+      args:
+        creates: /usr/local/bin/cfssljson
+        warn: false  # 禁用该任务的命令警告
+      register: download_result
+      retries: 10
+      delay: 5
+      until: download_result is succeeded
+      when: "'etcd' in group_names and is_primary_etcd_node and not cfssl_json_file.stat.exists"
+    
+    - name: 检查 cfssl-certinfo 是否已存在
+      become: yes
+      stat:
+        path: "/usr/local/bin/cfssl-certinfo"
+      register: cfssl_certinfo_file
+      when: "'etcd' in group_names and is_primary_etcd_node"
+    
+    - name: 下载 cfssl-certinfo
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "https://pkg.cfssl.org/R1.2/cfssl-certinfo_linux-amd64"
+        -O /usr/local/bin/cfssl-certinfo
+        warn: false  # 禁用该任务的命令警告
+      args:
+        creates: /usr/local/bin/cfssl-certinfo
+      register: download_result
+      retries: 10
+      delay: 5
+      until: download_result is succeeded
+      when: "'etcd' in group_names and is_primary_etcd_node and not cfssl_certinfo_file.stat.exists"
+
+- name: 配置 ETCD 证书
+  block:
+    - name: Gather facts for master and etcd nodes
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['master'] + groups['etcd'] }}"
+      run_once: true
+
+    - name: 检查证书是否已存在
+      become: yes
+      stat:
+        path: "{{ etcd_ssl }}/etcd-server.pem"
+      register: cert_exists
+      when: is_primary_etcd_node
+      tags: cert-check
+
+    - name: 创建证书目录
+      become: yes
+      file:
+        path: "{{ etcd_ssl }}"
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: '0700'
+      when: is_primary_etcd_node
+
+    - name: 生成 ca-config 配置文件
+      become: yes
+      template:
+        src: templates/ca-config.json.j2
+        dest: "{{ etcd_ssl }}/ca-config.json"
+        owner: etcd
+        group: etcd
+        mode: '0600'
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+
+    - name: 生成 ca 证书的 CSR 文件
+      become: yes
+      template:
+        src: templates/etcd-ca-csr.json.j2
+        dest: "{{ etcd_ssl }}/etcd-ca-csr.json"
+        owner: etcd
+        group: etcd
+        mode: '0600'
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+
+    - name: 生成etcd CA 证书和 CA 证书的 key
+      become: yes
+      shell: |
+        export PATH=$PATH:/usr/local/bin
+        cfssl gencert -initca etcd-ca-csr.json | cfssljson -bare etcd-ca
+      args:
+        chdir: "{{ etcd_ssl }}"
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+      register: ca_gen_result
+      changed_when: "'generated' in ca_gen_result.stdout"
+
+    - name: 生成服务器证书请求
+      become: yes
+      template:
+        src: templates/etcd-server-csr.json.j2
+        dest: "{{ etcd_ssl }}/etcd-server-csr.json"
+        owner: etcd
+        group: etcd
+        mode: '0600'
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+
+    - name: 生成服务器证书
+      become: yes
+      shell: |
+        export PATH=$PATH:/usr/local/bin
+        cfssl gencert -ca=etcd-ca.pem -ca-key=etcd-ca-key.pem \
+        -config=ca-config.json -profile=kubernetes etcd-server-csr.json | cfssljson -bare etcd-server
+      args:
+        chdir: "{{ etcd_ssl }}"
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+      register: server_cert_gen
+      changed_when: "'generated' in server_cert_gen.stdout"
+
+    - name: 检查证书文件是否存在
+      become: yes
+      stat:
+        path: "{{ etcd_ssl }}/{{ item }}"
+      register: cert_file_stat
+      loop:
+        - 'etcd-ca.pem'
+        - 'etcd-ca-key.pem'
+        - 'etcd-server.pem'
+        - 'etcd-server-key.pem'
+      loop_control:
+        label: "{{ item }}"
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+
+    - name: 验证生成的证书
+      become: yes
+      assert:
+        that:
+          - item.stat.exists
+        fail_msg: "关键证书文件 {{ item.item }} 未生成"
+      loop: "{{ cert_file_stat.results }}"
+      when: is_primary_etcd_node and (not cert_exists.stat.exists or force_cert_gen|default(false))
+
+  rescue:
+    - name: 证书生成失败处理
+      become: yes
+      fail:
+        msg: "ETCD证书生成失败，请检查错误日志"
+      when: is_primary_etcd_node
+
+    - name: 清理可能生成的不完整文件
+      become: yes
+      file:
+        path: "{{ etcd_ssl }}/{{ item }}"
+        state: absent
+      loop:
+        - 'etcd-ca.pem'
+        - 'etcd-ca-key.pem'
+        - 'etcd-server.pem'
+        - 'etcd-server-key.pem'
+      ignore_errors: yes
+      when: is_primary_etcd_node
+
+- name: 分发证书到集群节点
+  block:
+    - name: Gather facts for master and etcd nodes
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['master'] + groups['etcd'] }}"
+      run_once: true
+
+    - name: 检查主节点证书是否存在
+      become: yes
+      stat:
+        path: "{{ etcd_ssl }}/etcd-server.pem"
+      register: primary_cert_check
+      run_once: true
+      delegate_to: "{{ groups['etcd'][0] }}"
+
+    - name: 从主节点收集证书
+      become: yes
+      fetch:
+        src: "{{ etcd_ssl }}/{{ item }}"
+        dest: "/tmp/etcd-certs/{{ item }}"
+        flat: yes
+      run_once: true
+      delegate_to: "{{ groups['etcd'][0] }}"
+      loop:
+        - 'etcd-ca.pem'
+        - 'etcd-ca-key.pem'
+        - 'etcd-server.pem'
+        - 'etcd-server-key.pem'
+      when: (not primary_cert_check.stat.exists) or (force_cert_sync|default(false))
+
+    - name: 分发证书到ETCD节点
+      become: yes
+      copy:
+        src: "/tmp/etcd-certs/{{ item }}"
+        dest: "{{ etcd_ssl }}/{{ item }}"
+        owner: etcd
+        group: etcd
+        mode: "{{ '0600' if 'key' in item else '0600' }}"
+      loop:
+        - 'etcd-ca.pem'
+        - 'etcd-ca-key.pem'
+        - 'etcd-server.pem'
+        - 'etcd-server-key.pem'
+      when: 
+        - "'etcd' in group_names"
+        - "(not primary_cert_check.stat.exists) or (force_cert_sync|default(false))"
+
+    #- name: 分发证书到K8s Master节点
+    #  become: yes
+    #  copy:
+    #    src: "/tmp/etcd-certs/{{ item }}"
+    #    dest: "{{ etcd_ssl }}/{{ item }}"
+    #    owner: etcd
+    #    group: etcd
+    #    mode: "{{ '0600' if 'key' in item else '0600' }}"
+    #  loop:
+    #    - 'etcd-ca.pem'
+    #    - 'etcd-ca-key.pem'
+    #    - 'etcd-server.pem'
+    #    - 'etcd-server-key.pem'
+    #  when:
+    #    - "'master' in group_names"
+    #    - "(not primary_cert_check.stat.exists) or (force_cert_sync|default(false))"
+
+    - name: 分发证书到 K8s Master 节点
+      become: yes
+      copy:
+        src: "/tmp/etcd-certs/{{ item.1 }}"
+        dest: "{{ etcd_ssl }}/{{ item.1 }}"
+        owner: etcd
+        group: etcd
+        mode: "{{ '0600' if 'key' in item.1 else '0600' }}"
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ groups['master'] | product(['etcd-ca.pem','etcd-ca-key.pem','etcd-server.pem','etcd-server-key.pem']) | list }}"
+      run_once: true
+      loop_control:
+        label: "{{ item.0 }} -> {{ item.1 }}"
+
+    - name: 清理临时证书文件
+      become: yes
+      file:
+        path: "/tmp/etcd-certs"
+        state: absent
+      ignore_errors: yes
+
+- name: 启动 ETCD 服务
+  block:
+    - name: Gather facts for master and etcd nodes
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['master'] + groups['etcd'] }}"
+      run_once: true
+
+    - name: 创建 /var/lib/etcd 目录
+      become: yes
+      file:
+        path: "{{ etcd_data }}"
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: '0700'
+      when: "'etcd' in group_names"
+    
+    - name: 复制etcd配置
+      become: yes
+      template:
+        src: etcd.config.yml.j2
+        dest: "{{ etcd_conf }}/etcd.config.yml"
+        owner: etcd
+        group: etcd
+        mode: '0600'
+      when: "'etcd' in group_names"
+    
+    - name: 检查是否已经存在etcd二进制文件
+      become: yes
+      stat:
+        path: "/usr/local/src/etcd-{{ etcd_version }}-linux-amd64.tar.gz"
+      register: etcd_file
+      when: "'etcd' in group_names"
+    
+    - name: 下载etcd二进制文件
+      become: yes
+      command: >
+        wget --tries=3 --waitretry=10 --timeout=60
+        "{{ ghproxy }}/https://github.com/etcd-io/etcd/releases/download/{{ etcd_version }}/etcd-{{ etcd_version }}-linux-amd64.tar.gz"
+        -O "/usr/local/src/etcd-{{ etcd_version }}-linux-amd64.tar.gz"
+      args:
+        creates: "/usr/local/src/etcd-{{ etcd_version }}-linux-amd64.tar.gz"
+        warn: false  # 禁用该任务的命令警告
+      register: download_result
+      retries: 10
+      delay: 5
+      until: download_result is succeeded
+      when: "'etcd' in group_names and not etcd_file.stat.exists"
+    
+    - name: 解压etcd压缩包
+      become: yes
+      unarchive:
+        src: "/usr/local/src/etcd-{{ etcd_version }}-linux-amd64.tar.gz"
+        dest: "/usr/local/src"
+        remote_src: yes
+      when: "'etcd' in group_names"
+    
+    - name: 移动 etcd 和 etcdctl 到 /usr/local/bin/
+      become: yes
+      command: mv /usr/local/src/etcd-{{ etcd_version }}-linux-amd64/{{ item }} /usr/local/bin/
+      with_items:
+        - etcd
+        - etcdctl
+      when: "'etcd' in group_names"
+    
+    - name: 赋予可执行权限
+      become: yes
+      file:
+        path: /usr/local/bin/{{ item }}
+        mode: '0755'
+        state: file
+      loop:
+        - etcd
+        - etcdctl
+      when: "'etcd' in group_names"
+    
+    - name: 生成 etcd 服务文件
+      become: yes
+      template:
+        src: templates/etcd.service.j2
+        dest: /lib/systemd/system/etcd.service
+        mode: '0600'
+      when: "'etcd' in group_names"
+    
+    - name: 重新加载 systemd 服务文件
+      become: yes
+      systemd:
+        daemon_reload: yes
+      when: "'etcd' in group_names"
+    
+    - name: 禁用之前的 etcd 服务
+      become: yes
+      systemd:
+        name: etcd
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+      when: "'etcd' in group_names"
+    
+    - name: 启动并启用 etcd 服务
+      become: yes
+      systemd:
+        name: etcd
+        state: restarted
+        enabled: yes
+      when: "'etcd' in group_names"
+
+    - name: 验证 ETCD 集群健康
+      become: yes
+      shell: |
+        ETCDCTL_API=3 etcdctl \
+          --endpoints=https://{{ ansible_default_ipv4.address }}:2379 \
+          --cacert={{ etcd_ssl }}/etcd-ca.pem \
+          --cert={{ etcd_ssl }}/etcd-server.pem \
+          --key={{ etcd_ssl }}/etcd-server-key.pem \
+          endpoint health
+      register: etcd_health
+      changed_when: false
+      when: "'etcd' in group_names"
+    
+    - name: 显示 ETCD 健康状态
+      become: yes
+      debug:
+        msg: "ETCD 节点 {{ inventory_hostname }} 健康状态: {{ etcd_health.stdout }}"
+      when: "'etcd' in group_names and etcd_health.stdout is defined"
+  when: "'etcd' in group_names"
+
+- name: 设置 etcd 备份系统
+  block:
+    - name: Gather facts for master and etcd nodes
+      setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['master'] + groups['etcd'] }}"
+      run_once: true
+
+    - name: 创建备份目录
+      become: yes
+      file:
+        path: "{{ etcd_backup_dir | default('/var/lib/etcd-backup') }}"
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: '0750'
+
+    - name: 安装 etcd 备份脚本
+      become: yes
+      template:
+        src: templates/etcd-backup.sh.j2
+        dest: /usr/local/bin/etcd-backup.sh
+        owner: etcd
+        group: etcd
+        mode: '0750'
+
+    - name: 安装 etcd-backup.service
+      become: yes
+      template:
+        src: templates/etcd-backup.service.j2
+        dest: /etc/systemd/system/etcd-backup.service
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: 安装 etcd-backup.timer
+      become: yes
+      template:
+        src: templates/etcd-backup.timer.j2
+        dest: /etc/systemd/system/etcd-backup.timer
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: 重载 systemd
+      become: yes
+      systemd:
+        daemon_reload: yes
+
+    - name: 启用并启动 etcd-backup.timer
+      become: yes
+      systemd:
+        name: etcd-backup.timer
+        enabled: yes
+        state: started
+
+    - name: 执行首次备份
+      become: yes
+      command: /usr/local/bin/etcd-backup.sh
+      register: backup_result
+      changed_when: false
+      ignore_errors: yes
+
+    - name: 显示首次备份结果
+      become: yes
+      debug:
+        var: backup_result
+  when: "'etcd' in group_names"

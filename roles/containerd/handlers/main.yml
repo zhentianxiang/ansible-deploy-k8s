@@ -1,0 +1,12 @@
+- name: reload systemd
+  become: yes
+  command: systemctl daemon-reexec
+
+- name: restart containerd
+  become: yes
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+    enabled: yes
+  loop:
+    - containerd
