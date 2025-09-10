@@ -97,8 +97,13 @@ etcd:
 #  local:
 #    dataDir: /var/lib/etcd
 #{% endif %}
-scheduler: {}
-controllerManager: {}
+controllerManager:
+  extraArgs:
+    bind-address: "0.0.0.0"
+
+scheduler:
+  extraArgs:
+    bind-address: "0.0.0.0"
 dns: {}
 ---
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
