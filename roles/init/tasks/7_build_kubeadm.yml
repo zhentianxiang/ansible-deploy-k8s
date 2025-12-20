@@ -166,6 +166,14 @@
     mode: '0755'
   when: inventory_hostname != groups['k8s'][0]  # 排除主节点
 
+- name: 配置免密码 sudo
+  become: yes
+  copy:
+    content: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL"
+    dest: "/etc/sudoers.d/{{ ansible_user }}"
+    mode: '0440'
+  when: inventory_hostname != groups['k8s'][0]
+
 - name: "从主节点分发 kubeadm 到所有k8s节点"
   become: yes
   synchronize:
