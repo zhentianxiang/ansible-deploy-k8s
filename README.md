@@ -49,6 +49,8 @@
 - **网络**: 所有服务器之间需要网络互通，并能访问互联网（或您指定的内部镜像源）。
 - **SSH 免密登录**: 从 Ansible 控制节点到所有目标服务器的 SSH key-based 免密登录必须配置好，且如果使用普通用户需配置sudo权限。
 
+> 如果不配置免密登陆也是可以的
+
 ### 2. 配置主机清单 (`hosts.ini`)
 
 `hosts.ini` 文件是 Ansible 的库存文件，用于定义您的服务器角色和连接信息。请根据您的部署模式进行配置。
@@ -90,6 +92,58 @@ k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansibl
 etcd1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang
 etcd2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang
 etcd3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansible_user=tianxiang
+
+[master]
+k8s-master1
+k8s-master2
+k8s-master3
+
+[node]
+#k8s-node1
+#k8s-node2
+
+[etcd]
+etcd1
+etcd2
+etcd3
+
+[ha]
+k8s-master1 ha_name=ha-master
+k8s-master2 ha_name=ha-backup
+k8s-master3 ha_name=ha-backup
+
+#24小时token过期后添加node节点
+[newnode]
+[k8s:children]
+master
+node
+newnode
+```
+
+**不使用免密登陆方式**
+
+```
+$ sudo apt -y install sshpass
+```
+
+```
+[all]
+k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62
+k8s-master2 ansible_host=192.168.198.63 ip=192.168.198.63
+k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64
+#k8s-node1 ansible_host=192.168.198.65 ip=192.168.198.65
+#k8s-node2 ansible_host=192.168.198.66 ip=192.168.198.66
+etcd1 ansible_host=192.168.198.62 ip=192.168.198.62
+etcd2 ansible_host=192.168.198.63 ip=192.168.198.63
+etcd3 ansible_host=192.168.198.64 ip=192.168.198.64
+
+[all:vars]
+ansible_port=22
+ansible_user=tianxiang
+ansible_become=yes
+ansible_become_method=sudo
+ansible_become_password=tx010910.
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 
 [master]
 k8s-master1
