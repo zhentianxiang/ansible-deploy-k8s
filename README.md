@@ -140,6 +140,7 @@ etcd3 ansible_host=192.168.198.64 ip=192.168.198.64
 [all:vars]
 ansible_port=22
 ansible_user=tianxiang
+ansible_ssh_pass=tx010910.
 ansible_become=yes
 ansible_become_method=sudo
 ansible_become_password=tx010910.
