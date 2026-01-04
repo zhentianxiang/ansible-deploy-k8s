@@ -122,7 +122,10 @@
         dest: /etc/containerd/certs.d/docker.io/hosts.toml
         content: |
           server = "https://docker.io"
-    
+
+          [host."http://hub-mirror.c.163.com"]
+            capabilities = ["pull", "resolve", "push"]
+            insecure_skip_verify = true
           [host."https://dockerproxy.com"]
             capabilities = ["pull", "resolve", "push"]
             insecure_skip_verify = true
@@ -133,9 +136,6 @@
             capabilities = ["pull", "resolve", "push"]
             insecure_skip_verify = true
           [host."https://registry.docker-cn.com"]
-            capabilities = ["pull", "resolve", "push"]
-            insecure_skip_verify = true
-          [host."http://hub-mirror.c.163.com"]
             capabilities = ["pull", "resolve", "push"]
             insecure_skip_verify = true
           [host."https://docker.1panel.live"]

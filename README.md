@@ -61,8 +61,8 @@
 
 ```ini
 [all]
-k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang
-k8s-node1 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang
+k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+k8s-node1 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
 
 [master]
 k8s-master1
@@ -84,14 +84,14 @@ newnode
 
 ```ini
 [all]
-k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang
-k8s-master2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang
-k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansible_user=tianxiang
-#k8s-node1 ansible_host=192.168.198.65 ip=192.168.198.65 ansible_port=22 ansible_user=tianxiang
-#k8s-node2 ansible_host=192.168.198.66 ip=192.168.198.66 ansible_port=22 ansible_user=tianxiang
-etcd1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang
-etcd2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang
-etcd3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansible_user=tianxiang
+k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+k8s-master2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+#k8s-node1 ansible_host=192.168.198.65 ip=192.168.198.65 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+#k8s-node2 ansible_host=192.168.198.66 ip=192.168.198.66 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+etcd1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+etcd2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
+etcd3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_port=22 ansible_user=tianxiang ansible_python_interpreter=/usr/bin/python3
 
 [master]
 k8s-master1
@@ -128,14 +128,14 @@ $ sudo apt -y install sshpass
 
 ```
 [all]
-k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62
-k8s-master2 ansible_host=192.168.198.63 ip=192.168.198.63
-k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64
-#k8s-node1 ansible_host=192.168.198.65 ip=192.168.198.65
-#k8s-node2 ansible_host=192.168.198.66 ip=192.168.198.66
-etcd1 ansible_host=192.168.198.62 ip=192.168.198.62
-etcd2 ansible_host=192.168.198.63 ip=192.168.198.63
-etcd3 ansible_host=192.168.198.64 ip=192.168.198.64
+k8s-master1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_python_interpreter=/usr/bin/python3
+k8s-master2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_python_interpreter=/usr/bin/python3
+k8s-master3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_python_interpreter=/usr/bin/python3
+#k8s-node1 ansible_host=192.168.198.65 ip=192.168.198.65 ansible_python_interpreter=/usr/bin/python3
+#k8s-node2 ansible_host=192.168.198.66 ip=192.168.198.66 ansible_python_interpreter=/usr/bin/python3
+etcd1 ansible_host=192.168.198.62 ip=192.168.198.62 ansible_python_interpreter=/usr/bin/python3
+etcd2 ansible_host=192.168.198.63 ip=192.168.198.63 ansible_python_interpreter=/usr/bin/python3
+etcd3 ansible_host=192.168.198.64 ip=192.168.198.64 ansible_python_interpreter=/usr/bin/python3
 
 [all:vars]
 ansible_port=22
