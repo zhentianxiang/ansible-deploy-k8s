@@ -240,3 +240,139 @@ kubectl get pods -A
 ```
 
 如果所有节点都处于 `Ready` 状态，并且 `kube-system` 命名空间下的所有 Pod 都在正常运行 (`Running`)，那么恭喜您，集群已成功部署！
+
+## 安装 docker
+
+如果已经安装使用了 containerd ，那么再次使用 apt 方式安装 docker 就会出现冲突的问题，因此所以使用如下方法，采用二进制方式手动安装 docker
+
+
+```
+# 下载
+wget https://download.docker.com/linux/static/stable/x86_64/docker-28.2.2.tgz
+```
+
+```
+# 解压删除 containerd 相关
+tar xvf docker-28.2.2.tgz
+
+cd docker
+
+rm -rf containerd* runc ctr
+
+sudo cp * /usr/bin
+```
+
+```
+# 创建 systemd 管理文件
+sudo tee /etc/systemd/system/docker.socket << 'EOF'
+[Unit]
+Description=Docker Socket for the API
+PartOf=docker.service
+
+[Socket]
+ListenStream=/var/run/docker.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=docker
+
+[Install]
+WantedBy=sockets.target
+EOF
+
+
+
+sudo tee /etc/systemd/system/docker.service << 'EOF'
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target docker.socket firewalld.service containerd.service
+Wants=network-online.target
+Requires=docker.socket containerd.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/dockerd -H unix:///var/run/docker.sock --containerd=/run/containerd/containerd.sock
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+RestartSec=2
+Restart=always
+
+StartLimitBurst=3
+StartLimitInterval=60s
+
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+```
+# 创建 daemon 文件
+sudo mkdir -pv /etc/docker
+
+sudo tee /etc/docker/daemon.json << 'EOF'
+{
+  "data-root": "/var/lib/docker",
+  "registry-mirrors": [
+    "http://hub-mirror.c.163.com",
+    "https://docker.m.daocloud.io",
+    "https://docker.1panel.live",
+    "https://registry.docker-cn.com",
+    "https://cr.console.aliyun.com",
+    "https://mirror.ccs.tencentyun.com",
+    "https://huecker.io/",
+    "https://dockerhub.timeweb.cloud",
+    "https://noohub.ru/",
+    "https://dockerproxy.com",
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://docker.nju.edu.cn",
+    "https://xx4bwyg2.mirror.aliyuncs.com",
+    "http://f1361db2.m.daocloud.io",
+    "https://registry.docker-cn.com",
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://docker.registry.cyou",
+    "https://docker-cf.registry.cyou",
+    "https://dockercf.jsdelivr.fyi",
+    "https://docker.jsdelivr.fyi",
+    "https://dockertest.jsdelivr.fyi",
+    "https://mirror.aliyuncs.com",
+    "https://dockerproxy.com",
+    "https://mirror.baidubce.com",
+    "https://docker.m.daocloud.io",
+    "https://docker.nju.edu.cn",
+    "https://docker.mirrors.sjtug.sjtu.edu.cn",
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://mirror.iscas.ac.cn",
+    "https://docker.rainbond.cc"
+  ],
+  "insecure-registries": [
+      "172.21.16.12:5000"
+  ],
+  "live-restore": true,
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "10"
+  }
+}
+EOF
+```
+
+```
+# 启动
+sudo groupadd docker
+sudo systemctl daemon-reload
+sudo systemctl enable docker --now
+sudo docker info
+```
+
+
+
